@@ -416,20 +416,30 @@ jobs:
 
               # ---------------------------------------------------
               # TRY UPDATE FIRST
+              # iflow accepts Name+PackageId+ArtifactContent in PUT;
+              # all other types only accept ArtifactContent in PUT.
               # ---------------------------------------------------
 
               echo "♻️ Attempting UPDATE..."
+
+              if [ "$TYPE" = "iflow" ]; then
+                PUT_BODY="{
+                  \"Name\": \"$ARTIFACT_ID\",
+                  \"PackageId\": \"$PACKAGE_ID\",
+                  \"ArtifactContent\": \"$CONTENT\"
+                }"
+              else
+                PUT_BODY="{
+                  \"ArtifactContent\": \"$CONTENT\"
+                }"
+              fi
 
               RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
                 -X PUT \
                 "$CPI_HOST/api/v1/${CPI_UPLOAD_RESOURCE}(Id='$ARTIFACT_ID',Version='active')" \
                 -H "Authorization: Bearer $TOKEN" \
                 -H "Content-Type: application/json" \
-                -d "{
-                  \"Name\": \"$ARTIFACT_ID\",
-                  \"PackageId\": \"$PACKAGE_ID\",
-                  \"ArtifactContent\": \"$CONTENT\"
-                }")
+                -d "$PUT_BODY")
 
               STATUS=$(echo "$RESPONSE" | grep HTTP_STATUS | cut -d: -f2)
 
@@ -482,11 +492,7 @@ jobs:
                     "$CPI_HOST/api/v1/${CPI_UPLOAD_RESOURCE}(Id='$ARTIFACT_ID',Version='active')" \
                     -H "Authorization: Bearer $TOKEN" \
                     -H "Content-Type: application/json" \
-                    -d "{
-                      \"Name\": \"$ARTIFACT_ID\",
-                      \"PackageId\": \"$PACKAGE_ID\",
-                      \"ArtifactContent\": \"$CONTENT\"
-                    }")
+                    -d "$PUT_BODY")
 
                   STATUS=$(echo "$RESPONSE" | grep HTTP_STATUS | cut -d: -f2)
 
