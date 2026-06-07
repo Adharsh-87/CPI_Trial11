@@ -526,9 +526,15 @@ jobs:
 
                 echo "🚀 Deploying artifact: $ARTIFACT_ID..."
 
+                if [ "$TYPE" = "iflow" ]; then
+                  DEPLOY_ENDPOINT="$CPI_HOST/api/v1/DeployIntegrationDesigntimeArtifact?Id='$ARTIFACT_ID'&Version='active'"
+                elif [ "$TYPE" = "valuemapping" ]; then
+                  DEPLOY_ENDPOINT="$CPI_HOST/api/v1/DeployValueMappingDesigntimeArtifact?Id='$ARTIFACT_ID'&Version='active'"
+                fi
+
                 DEPLOY_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
                   -X POST \
-                  "$CPI_HOST/api/v1/DeployIntegrationDesigntimeArtifact?Id='$ARTIFACT_ID'&Version='active'" \
+                  "$DEPLOY_ENDPOINT" \
                   -H "Authorization: Bearer $TOKEN")
 
                 DEPLOY_STATUS=$(echo "$DEPLOY_RESPONSE" | grep HTTP_STATUS | cut -d: -f2)
