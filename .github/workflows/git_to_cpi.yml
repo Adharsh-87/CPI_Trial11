@@ -415,53 +415,71 @@ jobs:
               CONTENT=$(base64 -w 0 "$ZIP_FILE")
 
               # ---------------------------------------------------
-              # TRY UPDATE FIRST
-              # iflow accepts Name+PackageId+ArtifactContent in PUT;
-              # all other types only accept ArtifactContent in PUT.
+              # UPLOAD STRATEGY PER ARTIFACT TYPE
+              #
+              # iflow / messagemapping / scriptcollection:
+              #   → Try PUT (update), fallback to POST (create)
+              #
+              # valuemapping:
+              #   → SAP does not support PUT for ValueMapping.
+              #     Strategy: DELETE if exists, then POST (create).
               # ---------------------------------------------------
 
-              echo "♻️ Attempting UPDATE..."
-
-              if [ "$TYPE" = "iflow" ]; then
-                PUT_BODY="{
-                  \"Name\": \"$ARTIFACT_ID\",
-                  \"PackageId\": \"$PACKAGE_ID\",
-                  \"ArtifactContent\": \"$CONTENT\"
-                }"
-              else
-                PUT_BODY="{
-                  \"ArtifactContent\": \"$CONTENT\"
-                }"
-              fi
-
-              RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
-                -X PUT \
-                "$CPI_HOST/api/v1/${CPI_UPLOAD_RESOURCE}(Id='$ARTIFACT_ID',Version='active')" \
-                -H "Authorization: Bearer $TOKEN" \
-                -H "Content-Type: application/json" \
-                -d "$PUT_BODY")
-
-              STATUS=$(echo "$RESPONSE" | grep HTTP_STATUS | cut -d: -f2)
-
-              echo "$RESPONSE"
-
-              # ---------------------------------------------------
-              # UPDATE SUCCESS
-              # ---------------------------------------------------
-
-              if [ "$STATUS" = "200" ] || \
-                 [ "$STATUS" = "201" ] || \
-                 [ "$STATUS" = "202" ]; then
-
-                echo "✅ UPDATE successful: $ARTIFACT_ID"
-
-              else
-
-                echo "⚠️ UPDATE failed — trying CREATE..."
+              if [ "$TYPE" = "valuemapping" ]; then
 
                 # -------------------------------------------------
-                # CREATE ARTIFACT
+                # VALUEMAPPING: CHECK IF EXISTS
                 # -------------------------------------------------
+
+                echo "🔍 Checking if ValueMapping exists in CPI: $ARTIFACT_ID"
+
+                CHECK_STATUS=$(curl -s \
+                  -o /dev/null \
+                  -w "%{http_code}" \
+                  "$CPI_HOST/api/v1/${CPI_UPLOAD_RESOURCE}(Id='$ARTIFACT_ID',Version='active')" \
+                  -H "Authorization: Bearer $TOKEN" \
+                  -H "Accept: application/json")
+
+                # -------------------------------------------------
+                # VALUEMAPPING: DELETE IF EXISTS
+                # -------------------------------------------------
+
+                if [ "$CHECK_STATUS" = "200" ]; then
+
+                  echo "🗑️ Existing ValueMapping found — deleting before re-create..."
+
+                  DEL_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+                    -X DELETE \
+                    "$CPI_HOST/api/v1/${CPI_DELETE_RESOURCE}(Id='$ARTIFACT_ID',Version='active')" \
+                    -H "Authorization: Bearer $TOKEN")
+
+                  DEL_STATUS=$(echo "$DEL_RESPONSE" | grep HTTP_STATUS | cut -d: -f2)
+
+                  echo "$DEL_RESPONSE"
+
+                  if [ "$DEL_STATUS" != "200" ] && \
+                     [ "$DEL_STATUS" != "202" ] && \
+                     [ "$DEL_STATUS" != "204" ]; then
+
+                    echo "❌ Failed to delete existing ValueMapping: $ARTIFACT_ID"
+
+                    exit 1
+
+                  fi
+
+                  echo "✅ Deleted existing ValueMapping: $ARTIFACT_ID"
+
+                else
+
+                  echo "ℹ️ ValueMapping does not exist yet — proceeding to CREATE"
+
+                fi
+
+                # -------------------------------------------------
+                # VALUEMAPPING: CREATE (POST)
+                # -------------------------------------------------
+
+                echo "📤 Creating ValueMapping: $ARTIFACT_ID"
 
                 RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
                   -X POST \
@@ -479,38 +497,118 @@ jobs:
 
                 echo "$RESPONSE"
 
+                if [ "$STATUS" != "200" ] && \
+                   [ "$STATUS" != "201" ] && \
+                   [ "$STATUS" != "202" ]; then
+
+                  echo "❌ ValueMapping create failed: $ARTIFACT_ID"
+
+                  exit 1
+
+                fi
+
+                echo "✅ ValueMapping created: $ARTIFACT_ID"
+
+              else
+
                 # -------------------------------------------------
-                # HANDLE ALREADY EXISTS
+                # iflow / messagemapping / scriptcollection:
+                # TRY PUT (update) FIRST
                 # -------------------------------------------------
 
-                if echo "$RESPONSE" | grep -qi "already exists"; then
+                echo "♻️ Attempting UPDATE..."
 
-                  echo "⚠️ Artifact already exists — retrying UPDATE..."
+                if [ "$TYPE" = "iflow" ]; then
+                  PUT_BODY="{
+                    \"Name\": \"$ARTIFACT_ID\",
+                    \"PackageId\": \"$PACKAGE_ID\",
+                    \"ArtifactContent\": \"$CONTENT\"
+                  }"
+                else
+                  PUT_BODY="{
+                    \"ArtifactContent\": \"$CONTENT\"
+                  }"
+                fi
+
+                RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+                  -X PUT \
+                  "$CPI_HOST/api/v1/${CPI_UPLOAD_RESOURCE}(Id='$ARTIFACT_ID',Version='active')" \
+                  -H "Authorization: Bearer $TOKEN" \
+                  -H "Content-Type: application/json" \
+                  -d "$PUT_BODY")
+
+                STATUS=$(echo "$RESPONSE" | grep HTTP_STATUS | cut -d: -f2)
+
+                echo "$RESPONSE"
+
+                # -------------------------------------------------
+                # UPDATE SUCCESS
+                # -------------------------------------------------
+
+                if [ "$STATUS" = "200" ] || \
+                   [ "$STATUS" = "201" ] || \
+                   [ "$STATUS" = "202" ]; then
+
+                  echo "✅ UPDATE successful: $ARTIFACT_ID"
+
+                else
+
+                  echo "⚠️ UPDATE failed — trying CREATE..."
+
+                  # -----------------------------------------------
+                  # CREATE ARTIFACT (POST)
+                  # -----------------------------------------------
 
                   RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
-                    -X PUT \
-                    "$CPI_HOST/api/v1/${CPI_UPLOAD_RESOURCE}(Id='$ARTIFACT_ID',Version='active')" \
+                    -X POST \
+                    "$CPI_HOST/api/v1/IntegrationPackages('$PACKAGE_ID')/${CPI_UPLOAD_RESOURCE}" \
                     -H "Authorization: Bearer $TOKEN" \
                     -H "Content-Type: application/json" \
-                    -d "$PUT_BODY")
+                    -d "{
+                      \"Id\": \"$ARTIFACT_ID\",
+                      \"Name\": \"$ARTIFACT_ID\",
+                      \"PackageId\": \"$PACKAGE_ID\",
+                      \"ArtifactContent\": \"$CONTENT\"
+                    }")
 
                   STATUS=$(echo "$RESPONSE" | grep HTTP_STATUS | cut -d: -f2)
 
                   echo "$RESPONSE"
 
-                fi
+                  # -----------------------------------------------
+                  # HANDLE ALREADY EXISTS — RETRY PUT
+                  # -----------------------------------------------
 
-                # -------------------------------------------------
-                # FINAL VALIDATION
-                # -------------------------------------------------
+                  if echo "$RESPONSE" | grep -qi "already exists"; then
 
-                if [ "$STATUS" != "200" ] && \
-                   [ "$STATUS" != "201" ] && \
-                   [ "$STATUS" != "202" ]; then
+                    echo "⚠️ Artifact already exists — retrying UPDATE..."
 
-                  echo "❌ Artifact create/update failed: $ARTIFACT_ID"
+                    RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+                      -X PUT \
+                      "$CPI_HOST/api/v1/${CPI_UPLOAD_RESOURCE}(Id='$ARTIFACT_ID',Version='active')" \
+                      -H "Authorization: Bearer $TOKEN" \
+                      -H "Content-Type: application/json" \
+                      -d "$PUT_BODY")
 
-                  exit 1
+                    STATUS=$(echo "$RESPONSE" | grep HTTP_STATUS | cut -d: -f2)
+
+                    echo "$RESPONSE"
+
+                  fi
+
+                  # -----------------------------------------------
+                  # FINAL VALIDATION
+                  # -----------------------------------------------
+
+                  if [ "$STATUS" != "200" ] && \
+                     [ "$STATUS" != "201" ] && \
+                     [ "$STATUS" != "202" ]; then
+
+                    echo "❌ Artifact create/update failed: $ARTIFACT_ID"
+
+                    exit 1
+
+                  fi
 
                 fi
 
