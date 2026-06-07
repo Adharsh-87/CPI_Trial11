@@ -51,6 +51,10 @@ jobs:
         with:
           ref: ${{ github.event.inputs.target_git_branch }}
 
+      # Required to bundle the IFlow/Script folders into zip archives expected by CPI APIs
+      - name: Install Zip Utility
+        run: sudo apt-get update && sudo apt-get install -y zip
+
       - name: Validate Inputs and Sync Artifacts
         shell: bash
         run: |
@@ -63,11 +67,6 @@ jobs:
           SYNC_MODE="${{ github.event.inputs.sync_mode }}"
           ARTIFACT_NAME="${{ github.event.inputs.artifact_name }}"
           GIT_BRANCH="${{ github.event.inputs.target_git_branch }}"
-
-          echo "Target Branch: $GIT_BRANCH"
-          echo "Package ID: $PACKAGE_ID"
-          echo "Selected Type: $ARTIFACT_TYPE"
-          echo "Sync Mode: $SYNC_MODE"
 
           # 1. BASE PACKAGE VALIDATION
           if [ ! -d "./$PACKAGE_ID" ]; then
@@ -121,20 +120,74 @@ jobs:
           fi
           echo "Successfully authenticated with SAP CPI."
 
-          # Core Function to handle actual upload execution
+          # 4. LIVE UPLOAD FUNCTION
           upload_to_cpi() {
             local p_id=$1
             local folder_type=$2
-            local name=$3
-            echo "🚀 Pushing Sync -> Package: $p_id | Folder Type: $folder_type | Artifact: $name"
-            # (Insert your API Deployment scripts / curl calls utilizing $ACCESS_TOKEN here)
+            local a_name=$3
+            local item_path="./$p_id/$folder_type/$a_name"
+            
+            echo "------------------------------------------------"
+            echo "📦 Preparing Artifact: $a_name ($folder_type)"
+            
+            # Create a temporary working directory for compiling the artifact archive
+            TMP_DIR=$(mktemp -d)
+            ZIP_FILE="$TMP_DIR/$a_name.zip"
+
+            # Check if it is a directory (unzipped IFlow structure) or a direct file
+            if [ -d "$item_path" ]; then
+              # Zip the inner contents of the directory directly (do not include parent folder hierarchy inside zip)
+              (cd "$item_path" && zip -r "$ZIP_FILE" . > /dev/null)
+            else
+              # If it's a single raw file (like a standalone xml value mapping), bundle the file directly
+              cp "$item_path" "$TMP_DIR/"
+              (cd "$TMP_DIR" && zip "$ZIP_FILE" "$(basename "$item_path")" > /dev/null)
+            fi
+
+            # Check if artifact already exists in the package on CPI
+            CHECK_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer $ACCESS_TOKEN" \
+              "https://$CPI_HOST/api/v1/IntegrationPackages('$p_id')/IntegrationDesigntimeArtifacts(Id='$a_name',Version='active')")
+
+            if [ "$CHECK_STATUS" == "200" ]; then
+              echo "🔄 Artifact '$a_name' exists. Performing UPDATE (PUT method)..."
+              
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+                -H "Authorization: Bearer $ACCESS_TOKEN" \
+                -F "file=@$ZIP_FILE" \
+                "https://$CPI_HOST/api/v1/IntegrationPackages('$p_id')/IntegrationDesigntimeArtifacts(Id='$a_name',Version='active')")
+            else
+              echo "➕ Artifact '$a_name' does not exist. Performing CREATE (POST method)..."
+              
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+                -H "Authorization: Bearer $ACCESS_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{\"Id\":\"$a_name\", \"Name\":\"$a_name\"}" \
+                "https://$CPI_HOST/api/v1/IntegrationPackages('$p_id')/IntegrationDesigntimeArtifacts")
+                
+              # After creating the empty shell reference entry, upload the resource binary contents
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+                -H "Authorization: Bearer $ACCESS_TOKEN" \
+                -F "file=@$ZIP_FILE" \
+                "https://$CPI_HOST/api/v1/IntegrationPackages('$p_id')/IntegrationDesigntimeArtifacts(Id='$a_name',Version='active')")
+            fi
+
+            # Clean up local temporary file tracks
+            rm -rf "$TMP_DIR"
+
+            # Check execution API response boundaries (200 OK or 201 Created/Accepted)
+            if [[ "$HTTP_CODE" =~ ^20[0-1]$ ]]; then
+              echo "✅ Successfully synced and saved '$a_name' to CPI."
+            else
+              echo "❌ ERROR: Failed pushing '$a_name' to CPI. HTTP Response Code received: $HTTP_CODE"
+              exit 1
+            fi
           }
 
           echo "-----------------------------------------"
           echo " Executing Sync Operations... "
           echo "-----------------------------------------"
 
-          # Scenario A: Sync EVERYTHING across all categories
           if [ "$ARTIFACT_TYPE" == "all" ]; then
             echo "Sync Mode: ALL ARTIFACTS across all types for Package: $PACKAGE_ID"
             GIT_FOLDERS_ARR=("IntegrationFlow" "ValueMapping" "MessageMapping" "ScriptCollection")
@@ -142,19 +195,15 @@ jobs:
             for folder in "${GIT_FOLDERS_ARR[@]}"; do
               TARGET_DIR="./$PACKAGE_ID/$folder"
               if [ -d "$TARGET_DIR" ]; then
-                # Look inside the folder for individual subdirectories/files
                 for item in "$TARGET_DIR"/*; do
                   if [ -d "$item" ] || [ -f "$item" ]; then
                     ARTIFACT_BASE_NAME=$(basename "$item")
                     upload_to_cpi "$PACKAGE_ID" "$folder" "$ARTIFACT_BASE_NAME"
                   fi
                 done
-              else
-                echo "ℹ️ No directory found for structural type: $folder"
               fi
             done
 
-          # Scenario B: Sync ALL items found inside ONE chosen category 
           elif [ "$SYNC_MODE" == "ALL" ]; then
             echo "Sync Mode: ALL artifacts of type folder '$ARTIFACT_TYPE' in package '$PACKAGE_ID'"
             TARGET_DIR="./$PACKAGE_ID/$ARTIFACT_TYPE"
@@ -171,7 +220,6 @@ jobs:
               exit 1
             fi
 
-          # Scenario C: Target one specific single folder/file
           elif [ "$SYNC_MODE" == "SINGLE" ]; then
             echo "Sync Mode: SINGLE targeted artifact sync."
             upload_to_cpi "$PACKAGE_ID" "$ARTIFACT_TYPE" "$ARTIFACT_NAME"
