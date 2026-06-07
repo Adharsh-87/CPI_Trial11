@@ -1,4 +1,4 @@
-name: Sync Artifacts from Git to SAP CPI
+name: Sync Git to SAP CPI
 
 on:
   workflow_dispatch:
@@ -33,18 +33,18 @@ on:
       target_git_branch:
         description: 'Target Git Branch to pull from'
         required: true
+        default: 'CPI-Main'
         type: string
 
 jobs:
   sync-to-cpi:
     runs-on: ubuntu-latest
     
-    # Setting environment variables for the SAP CPI credentials (Store these in your GitHub Secrets)
     env:
-      CPI_HOST: ${{ secrets.CPI_TMN_HOST }}
-      CPI_CLIENT_ID: ${{ secrets.CLIENT_ID }}
-      CPI_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
-      CPI_TOKEN_URL: ${{ secrets.AUTH_URL }}
+      CPI_HOST: ${{ secrets.SAP_CPI_HOST }}
+      CPI_CLIENT_ID: ${{ secrets.SAP_CPI_CLIENT_ID }}
+      CPI_CLIENT_SECRET: ${{ secrets.SAP_CPI_CLIENT_SECRET }}
+      CPI_TOKEN_URL: ${{ secrets.SAP_CPI_TOKEN_URL }}
 
     steps:
       - name: Checkout Code from Target Branch
@@ -59,63 +59,65 @@ jobs:
           echo " Starting Validation & Sync Process "
           echo "========================================="
 
-          # 1. Extract inputs into variables
           PACKAGE_ID="${{ github.event.inputs.sap_cpi_package_id }}"
-          ARTIFACT_TYPE="${{ github.event.inputs.artifact_type }}"
+          INPUT_TYPE="${{ github.event.inputs.artifact_type }}"
           SYNC_MODE="${{ github.event.inputs.sync_mode }}"
           ARTIFACT_NAME="${{ github.event.inputs.artifact_name }}"
           GIT_BRANCH="${{ github.event.inputs.target_git_branch }}"
 
           echo "Target Branch: $GIT_BRANCH"
           echo "Package ID: $PACKAGE_ID"
-          echo "Artifact Type: $ARTIFACT_TYPE"
+          echo "Selected Input Type: $INPUT_TYPE"
           echo "Sync Mode: $SYNC_MODE"
 
-          # 2. INPUT VALIDATIONS
-          
-          # Validate Git Branch mapping folder exists locally
-          # (Assuming your repo structure organizes artifacts inside a directory named after the branch or standard paths)
-          if [ ! -d "./artifacts" ] && [ ! -d "./$PACKAGE_ID" ]; then
-            echo "❌ ERROR: Could not find any local artifact directories matching package layout in branch '$GIT_BRANCH'."
+          # Function to map UI choice names to actual Git Folder Names
+          get_git_folder_name() {
+            case "$1" in
+              "iflow") echo "IntegrationFlow" ;;
+              "valuemapping") echo "ValueMapping" ;;
+              "messagemapping") echo "MessageMapping" ;;
+              "scriptcollection") echo "ScriptCollection" ;;
+              *) echo "" ;;
+            esac
+          }
+
+          # 1. BASE PACKAGE VALIDATION
+          if [ ! -d "./$PACKAGE_ID" ]; then
+            echo "❌ ERROR: Package folder './$PACKAGE_ID' does not exist in branch '$GIT_BRANCH'."
             exit 1
           fi
 
-          # Validate Package ID format (basic alphanumeric check, modify based on your naming convention)
           if [[ ! "$PACKAGE_ID" =~ ^[a-zA-Z0-9_\-]+$ ]]; then
             echo "❌ ERROR: Invalid SAP CPI Package ID format: '$PACKAGE_ID'"
             exit 1
           fi
 
-          # Conditional Validation: If Sync Mode is SINGLE, Artifact Name MUST be provided
+          # Get Git Folder Name equivalent for validation rules
+          GIT_FOLDER=$(get_git_folder_name "$INPUT_TYPE")
+
+          # 2. CONDITIONAL VALIDATION FOR SINGLE SYNC
           if [ "$SYNC_MODE" == "SINGLE" ]; then
             if [ -z "$ARTIFACT_NAME" ]; then
               echo "❌ ERROR: Sync Mode is set to 'SINGLE' but no 'Artifact Name' was provided."
               exit 1
             fi
-            echo "Artifact Name to Sync: $ARTIFACT_NAME"
             
-            # Validate that the specific file/folder exists in Git repository
-            # Adjust path rules matching how you store artifacts (e.g., ./packages/package_id/iflows/iflow_name)
-            if [ "$ARTIFACT_TYPE" != "all" ]; then
-              LOCAL_PATH="./$PACKAGE_ID/$ARTIFACT_TYPE/$ARTIFACT_NAME"
+            if [ "$INPUT_TYPE" != "all" ]; then
+              LOCAL_PATH="./$PACKAGE_ID/$GIT_FOLDER/$ARTIFACT_NAME"
               if [ ! -d "$LOCAL_PATH" ] && [ ! -f "$LOCAL_PATH" ]; then
-                echo "❌ ERROR: Local path '$LOCAL_PATH' for artifact '$ARTIFACT_NAME' does not exist in branch '$GIT_BRANCH'."
+                echo "❌ ERROR: Local path '$LOCAL_PATH' for artifact '$ARTIFACT_NAME' does not exist."
                 exit 1
               fi
             fi
           fi
 
-          # Conflict Validation: If Artifact Type is 'all', Sync Mode MUST be 'ALL'
-          if [ "$ARTIFACT_TYPE" == "all" ] && [ "$SYNC_MODE" == "SINGLE" ]; then
-            echo "⚠️ WARNING: Conflict detected. Artifact Type is 'all', turning Sync Mode into 'ALL'."
+          if [ "$INPUT_TYPE" == "all" ] && [ "$SYNC_MODE" == "SINGLE" ]; then
+            echo "⚠️ WARNING: Conflict detected. Artifact Type is 'all', resetting Sync Mode to 'ALL'."
             SYNC_MODE="ALL"
           fi
 
-
-          # 3. SAP CPI AUTHENTICATION (OAuth2 Client Credentials Grant Token Fetching)
+          # 3. CPI AUTHENTICATION BLOCK
           echo "Fetching Access Token from SAP CPI Integration Suite..."
-          
-          # Validation for missing secrets
           if [ -z "$CPI_TOKEN_URL" ] || [ -z "$CPI_CLIENT_ID" ] || [ -z "$CPI_CLIENT_SECRET" ]; then
             echo "❌ ERROR: SAP CPI credentials are missing in GitHub secrets."
             exit 1
@@ -128,77 +130,66 @@ jobs:
             -d "client_secret=$CPI_CLIENT_SECRET")
 
           ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | grep -oP '"access_token":"\K[^"]+')
-
           if [ -z "$ACCESS_TOKEN" ]; then
-            echo "❌ ERROR: Failed to retrieve Access Token from SAP CPI. Response details:"
-            echo "$TOKEN_RESPONSE"
+            echo "❌ ERROR: Failed to retrieve Access Token from SAP CPI."
             exit 1
           fi
           echo "Successfully authenticated with SAP CPI."
 
-
-          # 4. EXECUTE DYNAMIC SYNC LOGIC
-          
-          # Function to upload artifact to CPI
+          # Core Function to handle actual upload execution
           upload_to_cpi() {
             local p_id=$1
-            local type=$2
+            local git_folder_type=$2
             local name=$3
-            echo "Processing sync for: Package -> $p_id | Type -> $type | Name -> $name"
-            
-            # Placeholder for your specific CPI Integration Suite Integration Designtime API Call
-            # Example API Endpoint syntax for CPI OData API:
-            # URL: https://$CPI_HOST/api/v1/IntegrationPackages('$p_id')/IntegrationDesigntimeArtifacts
-            
-            # Replace the curl statement below with your deployment tool (e.g., CPILint, CPI OData API payload upload, or custom node scripts)
-            echo "Executing REST API upload from Git structure to CPI..."
-            
-            # Mock API execution verification step:
-            # RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "https://${CPI_HOST}/api/v1/IntegrationPackages('${p_id}')/Artifacts" ...)
+            echo "🚀 Pushing Sync -> Package: $p_id | Folder Type: $git_folder_type | Artifact: $name"
+            # (Insert your API Deployment scripts / curl calls utilizing $ACCESS_TOKEN here)
           }
 
           echo "-----------------------------------------"
           echo " Executing Sync Operations... "
           echo "-----------------------------------------"
 
-          # Scenario A: Retrieve EVERYTHING inside the package (Artifact Type = all)
-          if [ "$ARTIFACT_TYPE" == "all" ]; then
+          # Scenario A: Sync EVERYTHING across all categories
+          if [ "$INPUT_TYPE" == "all" ]; then
             echo "Sync Mode: ALL ARTIFACTS across all types for Package: $PACKAGE_ID"
+            GIT_FOLDERS_ARR=("IntegrationFlow" "ValueMapping" "MessageMapping" "ScriptCollection")
             
-            TYPES_ARR=("iflow" "valuemapping" "messagemapping" "scriptcollection")
-            for t in "${TYPES_ARR[@]}"; do
-              if [ -d "./$PACKAGE_ID/$t" ]; then
-                for dir in "./$PACKAGE_ID/$t"/*; do
-                  if [ -d "$dir" ] || [ -f "$dir" ]; then
-                    ARTIFACT_BASE_NAME=$(basename "$dir")
-                    upload_to_cpi "$PACKAGE_ID" "$t" "$ARTIFACT_BASE_NAME"
+            for folder in "${GIT_FOLDERS_ARR[@]}"; do
+              TARGET_DIR="./$PACKAGE_ID/$folder"
+              if [ -d "$TARGET_DIR" ]; then
+                # Look inside the folder for individual subdirectories/files
+                for item in "$TARGET_DIR"/*; do
+                  if [ -d "$item" ] || [ -f "$item" ]; then
+                    ARTIFACT_BASE_NAME=$(basename "$item")
+                    upload_to_cpi "$PACKAGE_ID" "$folder" "$ARTIFACT_BASE_NAME"
                   fi
                 done
               else
-                echo "No folder discovered for artifact type: $t"
+                echo "ℹ️ No directory found for structural type: $folder"
               fi
             done
 
-          # Scenario B: Retrieve ALL items belonging to ONE specific artifact type
+          # Scenario B: Sync ALL items found inside ONE chosen category 
           elif [ "$SYNC_MODE" == "ALL" ]; then
-            echo "Sync Mode: ALL artifacts of type '$ARTIFACT_TYPE' in package '$PACKAGE_ID'"
+            echo "Sync Mode: ALL artifacts of type folder '$GIT_FOLDER' in package '$PACKAGE_ID'"
+            TARGET_DIR="./$PACKAGE_ID/$GIT_FOLDER"
             
-            if [ -d "./$PACKAGE_ID/$ARTIFACT_TYPE" ]; then
-              for dir in "./$PACKAGE_ID/$ARTIFACT_TYPE"/*; do
-                if [ -d "$dir" ] || [ -f "$dir" ]; then
-                  ARTIFACT_BASE_NAME=$(basename "$dir")
-                  upload_to_cpi "$PACKAGE_ID" "$ARTIFACT_TYPE" "$ARTIFACT_BASE_NAME"
+            if [ -d "$TARGET_DIR" ]; then
+              for item in "$TARGET_DIR"/*; do
+                if [ -d "$item" ] || [ -f "$item" ]; then
+                  ARTIFACT_BASE_NAME=$(basename "$item")
+                  upload_to_cpi "$PACKAGE_ID" "$GIT_FOLDER" "$ARTIFACT_BASE_NAME"
                 fi
               done
             else
-              echo "❌ ERROR: Directory './$PACKAGE_ID/$ARTIFACT_TYPE' not found in Git branch."
+              echo "❌ ERROR: Directory '$TARGET_DIR' not found in Git workspace."
               exit 1
             fi
 
-          # Scenario C: Sync ONE SINGLE specific item
+          # Scenario C: Target one specific single folder/file
           elif [ "$SYNC_MODE" == "SINGLE" ]; then
-            echo "Sync Mode: SINGLE targeted sync."
-            upload_to_cpi "$PACKAGE_ID" "$ARTIFACT_TYPE" "$ARTIFACT_NAME"
+            echo "Sync Mode: SINGLE targeted artifact sync."
+            upload_to_cpi "$PACKAGE_ID" "$GIT_FOLDER" "$ARTIFACT_NAME"
           fi
 
           echo "========================================="
