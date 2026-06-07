@@ -185,46 +185,108 @@ jobs:
           }
 
           echo "-----------------------------------------"
-          echo " Executing Sync Operations... "
+          echo " Executing Sync Operations "
           echo "-----------------------------------------"
 
-          if [ "$ARTIFACT_TYPE" == "all" ]; then
-            echo "Sync Mode: ALL ARTIFACTS across all types for Package: $PACKAGE_ID"
-            GIT_FOLDERS_ARR=("IntegrationFlow" "ValueMapping" "MessageMapping" "ScriptCollection")
-            
-            for folder in "${GIT_FOLDERS_ARR[@]}"; do
-              TARGET_DIR="./$PACKAGE_ID/$folder"
-              if [ -d "$TARGET_DIR" ]; then
-                for item in "$TARGET_DIR"/*; do
-                  if [ -d "$item" ] || [ -f "$item" ]; then
-                    ARTIFACT_BASE_NAME=$(basename "$item")
-                    upload_to_cpi "$PACKAGE_ID" "$folder" "$ARTIFACT_BASE_NAME"
-                  fi
-                done
-              fi
-            done
+          # ==========================================
+          # BUILD ARTIFACT TYPE LIST
+          # ==========================================
 
-          elif [ "$SYNC_MODE" == "ALL" ]; then
-            echo "Sync Mode: ALL artifacts of type folder '$ARTIFACT_TYPE' in package '$PACKAGE_ID'"
-            TARGET_DIR="./$PACKAGE_ID/$ARTIFACT_TYPE"
-            
-            if [ -d "$TARGET_DIR" ]; then
-              for item in "$TARGET_DIR"/*; do
-                if [ -d "$item" ] || [ -f "$item" ]; then
-                  ARTIFACT_BASE_NAME=$(basename "$item")
-                  upload_to_cpi "$PACKAGE_ID" "$ARTIFACT_TYPE" "$ARTIFACT_BASE_NAME"
-                fi
-              done
-            else
-              echo "❌ ERROR: Directory '$TARGET_DIR' not found in Git workspace."
-              exit 1
-            fi
+          declare -a ARTIFACT_TYPES
 
-          elif [ "$SYNC_MODE" == "SINGLE" ]; then
-            echo "Sync Mode: SINGLE targeted artifact sync."
-            upload_to_cpi "$PACKAGE_ID" "$ARTIFACT_TYPE" "$ARTIFACT_NAME"
+          if [ "$ARTIFACT_TYPE" = "all" ]; then
+
+          echo "Artifact Type = ALL"
+          echo "Sync Mode automatically set to ALL"
+
+          SYNC_MODE="ALL"
+
+          ARTIFACT_TYPES=(
+          "IntegrationFlow"
+          "MessageMapping"
+          "ValueMapping"
+          "ScriptCollection"
+          )
+
+          else
+
+          ARTIFACT_TYPES=("$ARTIFACT_TYPE")
+
           fi
 
+          # ==========================================
+          # PROCESS TYPES
+          # ==========================================
+
+          for CURRENT_TYPE in "${ARTIFACT_TYPES[@]}"
+          do
+
+          TARGET_DIR="./$PACKAGE_ID/$CURRENT_TYPE"
+
+          echo ""
           echo "========================================="
-          echo " Sync Job Successfully Completed! "
+          echo "Processing Type : $CURRENT_TYPE"
+          echo "Directory       : $TARGET_DIR"
+          echo "========================================="
+
+          if [ ! -d "$TARGET_DIR" ]; then
+          echo "Directory not found. Skipping."
+          continue
+          fi
+
+          # ========================================
+          # SINGLE MODE
+          # ========================================
+
+          if [ "$SYNC_MODE" = "SINGLE" ]; then
+
+          ITEM="$TARGET_DIR/$ARTIFACT_NAME"
+
+          if [ ! -d "$ITEM" ] && [ ! -f "$ITEM" ]; then
+          echo "Artifact not found:"
+          echo "$ITEM"
+          exit 1
+          fi
+
+          upload_to_cpi \
+          "$PACKAGE_ID" \
+          "$CURRENT_TYPE" \
+          "$ARTIFACT_NAME"
+
+          continue
+
+          fi
+
+          # ========================================
+          # ALL MODE
+          # ========================================
+
+          FOUND=false
+
+          for ITEM in "$TARGET_DIR"/*
+          do
+
+          [ -e "$ITEM" ] || continue
+
+          FOUND=true
+
+          ARTIFACT_BASE_NAME=$(basename "$ITEM")
+
+          upload_to_cpi \
+          "$PACKAGE_ID" \
+          "$CURRENT_TYPE" \
+          "$ARTIFACT_BASE_NAME"
+
+          done
+
+          if [ "$FOUND" = false ]; then
+          echo "No artifacts found in:"
+          echo "$TARGET_DIR"
+          fi
+
+          done
+
+          echo ""
+          echo "========================================="
+          echo " Git → CPI Sync Completed Successfully "
           echo "========================================="
