@@ -33,7 +33,6 @@ on:
       target_git_branch:
         description: 'Target Git Branch to pull from'
         required: true
-        default: 'CPI-Main'
         type: string
 
 jobs:
@@ -49,7 +48,7 @@ jobs:
 
     steps:
       - name: Checkout Code from Target Branch
-        uses: actions/checkout:v4
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.target_git_branch }}
 
