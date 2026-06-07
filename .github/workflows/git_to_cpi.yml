@@ -10,13 +10,13 @@ on:
       artifact_type:
         description: 'Artifact Type to sync'
         required: true
-        default: 'iflow'
+        default: 'IntegrationFlow'
         type: choice
         options:
-          - iflow
-          - valuemapping
-          - messagemapping
-          - scriptcollection
+          - IntegrationFlow
+          - ValueMapping
+          - MessageMapping
+          - ScriptCollection
           - all
       sync_mode:
         description: 'Sync Mode (SINGLE for specific artifact name, ALL for entire type/package)'
@@ -60,26 +60,15 @@ jobs:
           echo "========================================="
 
           PACKAGE_ID="${{ github.event.inputs.sap_cpi_package_id }}"
-          INPUT_TYPE="${{ github.event.inputs.artifact_type }}"
+          ARTIFACT_TYPE="${{ github.event.inputs.artifact_type }}"
           SYNC_MODE="${{ github.event.inputs.sync_mode }}"
           ARTIFACT_NAME="${{ github.event.inputs.artifact_name }}"
           GIT_BRANCH="${{ github.event.inputs.target_git_branch }}"
 
           echo "Target Branch: $GIT_BRANCH"
           echo "Package ID: $PACKAGE_ID"
-          echo "Selected Input Type: $INPUT_TYPE"
+          echo "Selected Type: $ARTIFACT_TYPE"
           echo "Sync Mode: $SYNC_MODE"
-
-          # Function to map UI choice names to actual Git Folder Names
-          get_git_folder_name() {
-            case "$1" in
-              "iflow") echo "IntegrationFlow" ;;
-              "valuemapping") echo "ValueMapping" ;;
-              "messagemapping") echo "MessageMapping" ;;
-              "scriptcollection") echo "ScriptCollection" ;;
-              *) echo "" ;;
-            esac
-          }
 
           # 1. BASE PACKAGE VALIDATION
           if [ ! -d "./$PACKAGE_ID" ]; then
@@ -92,9 +81,6 @@ jobs:
             exit 1
           fi
 
-          # Get Git Folder Name equivalent for validation rules
-          GIT_FOLDER=$(get_git_folder_name "$INPUT_TYPE")
-
           # 2. CONDITIONAL VALIDATION FOR SINGLE SYNC
           if [ "$SYNC_MODE" == "SINGLE" ]; then
             if [ -z "$ARTIFACT_NAME" ]; then
@@ -102,8 +88,8 @@ jobs:
               exit 1
             fi
             
-            if [ "$INPUT_TYPE" != "all" ]; then
-              LOCAL_PATH="./$PACKAGE_ID/$GIT_FOLDER/$ARTIFACT_NAME"
+            if [ "$ARTIFACT_TYPE" != "all" ]; then
+              LOCAL_PATH="./$PACKAGE_ID/$ARTIFACT_TYPE/$ARTIFACT_NAME"
               if [ ! -d "$LOCAL_PATH" ] && [ ! -f "$LOCAL_PATH" ]; then
                 echo "❌ ERROR: Local path '$LOCAL_PATH' for artifact '$ARTIFACT_NAME' does not exist."
                 exit 1
@@ -111,7 +97,7 @@ jobs:
             fi
           fi
 
-          if [ "$INPUT_TYPE" == "all" ] && [ "$SYNC_MODE" == "SINGLE" ]; then
+          if [ "$ARTIFACT_TYPE" == "all" ] && [ "$SYNC_MODE" == "SINGLE" ]; then
             echo "⚠️ WARNING: Conflict detected. Artifact Type is 'all', resetting Sync Mode to 'ALL'."
             SYNC_MODE="ALL"
           fi
@@ -139,9 +125,9 @@ jobs:
           # Core Function to handle actual upload execution
           upload_to_cpi() {
             local p_id=$1
-            local git_folder_type=$2
+            local folder_type=$2
             local name=$3
-            echo "🚀 Pushing Sync -> Package: $p_id | Folder Type: $git_folder_type | Artifact: $name"
+            echo "🚀 Pushing Sync -> Package: $p_id | Folder Type: $folder_type | Artifact: $name"
             # (Insert your API Deployment scripts / curl calls utilizing $ACCESS_TOKEN here)
           }
 
@@ -150,7 +136,7 @@ jobs:
           echo "-----------------------------------------"
 
           # Scenario A: Sync EVERYTHING across all categories
-          if [ "$INPUT_TYPE" == "all" ]; then
+          if [ "$ARTIFACT_TYPE" == "all" ]; then
             echo "Sync Mode: ALL ARTIFACTS across all types for Package: $PACKAGE_ID"
             GIT_FOLDERS_ARR=("IntegrationFlow" "ValueMapping" "MessageMapping" "ScriptCollection")
             
@@ -171,14 +157,14 @@ jobs:
 
           # Scenario B: Sync ALL items found inside ONE chosen category 
           elif [ "$SYNC_MODE" == "ALL" ]; then
-            echo "Sync Mode: ALL artifacts of type folder '$GIT_FOLDER' in package '$PACKAGE_ID'"
-            TARGET_DIR="./$PACKAGE_ID/$GIT_FOLDER"
+            echo "Sync Mode: ALL artifacts of type folder '$ARTIFACT_TYPE' in package '$PACKAGE_ID'"
+            TARGET_DIR="./$PACKAGE_ID/$ARTIFACT_TYPE"
             
             if [ -d "$TARGET_DIR" ]; then
               for item in "$TARGET_DIR"/*; do
                 if [ -d "$item" ] || [ -f "$item" ]; then
                   ARTIFACT_BASE_NAME=$(basename "$item")
-                  upload_to_cpi "$PACKAGE_ID" "$GIT_FOLDER" "$ARTIFACT_BASE_NAME"
+                  upload_to_cpi "$PACKAGE_ID" "$ARTIFACT_TYPE" "$ARTIFACT_BASE_NAME"
                 fi
               done
             else
@@ -189,7 +175,7 @@ jobs:
           # Scenario C: Target one specific single folder/file
           elif [ "$SYNC_MODE" == "SINGLE" ]; then
             echo "Sync Mode: SINGLE targeted artifact sync."
-            upload_to_cpi "$PACKAGE_ID" "$GIT_FOLDER" "$ARTIFACT_NAME"
+            upload_to_cpi "$PACKAGE_ID" "$ARTIFACT_TYPE" "$ARTIFACT_NAME"
           fi
 
           echo "========================================="
