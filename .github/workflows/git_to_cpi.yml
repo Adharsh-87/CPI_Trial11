@@ -1,292 +1,586 @@
-name: Sync Git to SAP CPI
+name: Deploy Github Artifact to SAP CPI
 
 on:
   workflow_dispatch:
     inputs:
-      sap_cpi_package_id:
-        description: 'SAP CPI Package ID'
+
+      PACKAGE_ID:
+        description: "SAP CPI Package ID"
         required: true
         type: string
-      artifact_type:
-        description: 'Artifact Type to sync'
+
+      ARTIFACT_TYPE:
+        description: "Artifact Type"
         required: true
-        default: 'IntegrationFlow'
+        default: "iflow"
         type: choice
         options:
-          - IntegrationFlow
-          - ValueMapping
-          - MessageMapping
-          - ScriptCollection
+          - iflow
+          - valuemapping
+          - messagemapping
+          - scriptcollection
           - all
-      sync_mode:
-        description: 'Sync Mode (SINGLE for specific artifact name, ALL for entire type/package)'
+
+      DEPLOY_MODE:
+        description: "Sync Mode"
         required: true
-        default: 'ALL'
+        default: "ALL"
         type: choice
         options:
           - ALL
           - SINGLE
-      artifact_name:
-        description: 'Artifact Name (Required only if Sync Mode is SINGLE)'
+
+      ARTIFACT_ID:
+        description: "Artifact ID (Required for SINGLE mode)"
         required: false
         type: string
-      target_git_branch:
-        description: 'Target Git Branch to pull from'
-        required: true
-        type: string
+
+permissions:
+  contents: read
 
 jobs:
-  sync-to-cpi:
+  deploy:
     runs-on: ubuntu-latest
-    
-    env:
-      CPI_HOST: ${{ secrets.CPI_TMN_HOST }}
-      CPI_CLIENT_ID: ${{ secrets.CLIENT_ID }}
-      CPI_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
-      CPI_TOKEN_URL: ${{ secrets.AUTH_URL }}
 
     steps:
-      - name: Checkout Code from Target Branch
+
+      # =========================================================
+      # CHECKOUT REPOSITORY
+      # =========================================================
+
+      - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.target_git_branch }}
 
-      # Required to bundle the IFlow/Script folders into zip archives expected by CPI APIs
-      - name: Install Zip Utility
-        run: sudo apt-get update && sudo apt-get install -y zip
+      # =========================================================
+      # INSTALL REQUIRED PACKAGES
+      # =========================================================
 
-      - name: Validate Inputs and Sync Artifacts
-        shell: bash
+      - name: Install Required Packages
         run: |
-          echo "========================================="
-          echo " Starting Validation & Sync Process "
-          echo "========================================="
 
-          PACKAGE_ID="${{ github.event.inputs.sap_cpi_package_id }}"
-          ARTIFACT_TYPE="${{ github.event.inputs.artifact_type }}"
-          SYNC_MODE="${{ github.event.inputs.sync_mode }}"
-          ARTIFACT_NAME="${{ github.event.inputs.artifact_name }}"
-          GIT_BRANCH="${{ github.event.inputs.target_git_branch }}"
+          sudo apt-get update
 
-          # 1. BASE PACKAGE VALIDATION
-          if [ ! -d "./$PACKAGE_ID" ]; then
-            echo "❌ ERROR: Package folder './$PACKAGE_ID' does not exist in branch '$GIT_BRANCH'."
+          sudo apt-get install -y zip jq curl
+
+      # =========================================================
+      # DEPLOY TO SAP CPI
+      # =========================================================
+
+      - name: Deploy Artifacts to SAP CPI
+
+        env:
+          CPI_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CPI_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+          CPI_TOKEN_URL: ${{ secrets.AUTH_URL }}
+          CPI_HOST: ${{ secrets.CPI_TMN_HOST }}
+
+        run: |
+
+          set -e
+
+          PACKAGE_ID="${{ github.event.inputs.PACKAGE_ID }}"
+          ARTIFACT_TYPE="${{ github.event.inputs.ARTIFACT_TYPE }}"
+          DEPLOY_MODE="${{ github.event.inputs.DEPLOY_MODE }}"
+          DEPLOY_ARTIFACT="${{ github.event.inputs.ARTIFACT_ID }}"
+
+          # =========================================================
+          # VALIDATE SINGLE MODE
+          # =========================================================
+
+          if [ "$DEPLOY_MODE" = "SINGLE" ] && \
+             [ -z "$DEPLOY_ARTIFACT" ]; then
+
+            echo "❌ ARTIFACT_ID is required for SINGLE mode"
+
             exit 1
+
           fi
 
-          if [[ ! "$PACKAGE_ID" =~ ^[a-zA-Z0-9_\-]+$ ]]; then
-            echo "❌ ERROR: Invalid SAP CPI Package ID format: '$PACKAGE_ID'"
-            exit 1
-          fi
+          # =========================================================
+          # FETCH OAUTH TOKEN
+          # =========================================================
 
-          # 2. CONDITIONAL VALIDATION FOR SINGLE SYNC
-          if [ "$SYNC_MODE" == "SINGLE" ]; then
-            if [ -z "$ARTIFACT_NAME" ]; then
-              echo "❌ ERROR: Sync Mode is set to 'SINGLE' but no 'Artifact Name' was provided."
-              exit 1
-            fi
-            
-            if [ "$ARTIFACT_TYPE" != "all" ]; then
-              LOCAL_PATH="./$PACKAGE_ID/$ARTIFACT_TYPE/$ARTIFACT_NAME"
-              if [ ! -d "$LOCAL_PATH" ] && [ ! -f "$LOCAL_PATH" ]; then
-                echo "❌ ERROR: Local path '$LOCAL_PATH' for artifact '$ARTIFACT_NAME' does not exist."
-                exit 1
-              fi
-            fi
-          fi
+          echo "🔑 Fetching OAuth token..."
 
-          if [ "$ARTIFACT_TYPE" == "all" ] && [ "$SYNC_MODE" == "SINGLE" ]; then
-            echo "⚠️ WARNING: Conflict detected. Artifact Type is 'all', resetting Sync Mode to 'ALL'."
-            SYNC_MODE="ALL"
-          fi
-
-          # 3. CPI AUTHENTICATION BLOCK
-          echo "Fetching Access Token from SAP CPI Integration Suite..."
-          if [ -z "$CPI_TOKEN_URL" ] || [ -z "$CPI_CLIENT_ID" ] || [ -z "$CPI_CLIENT_SECRET" ]; then
-            echo "❌ ERROR: SAP CPI credentials are missing in GitHub secrets."
-            exit 1
-          fi
-
-          TOKEN_RESPONSE=$(curl -s -X POST "$CPI_TOKEN_URL" \
+          TOKEN_RESPONSE=$(curl -s -X POST \
+            -u "$CPI_CLIENT_ID:$CPI_CLIENT_SECRET" \
             -H "Content-Type: application/x-www-form-urlencoded" \
             -d "grant_type=client_credentials" \
-            -d "client_id=$CPI_CLIENT_ID" \
-            -d "client_secret=$CPI_CLIENT_SECRET")
+            "$CPI_TOKEN_URL")
 
-          ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | grep -oP '"access_token":"\K[^"]+')
-          if [ -z "$ACCESS_TOKEN" ]; then
-            echo "❌ ERROR: Failed to retrieve Access Token from SAP CPI."
+          TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+
+          if [ "$TOKEN" = "null" ] || \
+             [ -z "$TOKEN" ]; then
+
+            echo "❌ Failed to get access token"
+
+            echo "$TOKEN_RESPONSE"
+
             exit 1
+
           fi
-          echo "Successfully authenticated with SAP CPI."
 
-          # 4. LIVE UPLOAD FUNCTION
-          upload_to_cpi() {
-            local p_id=$1
-            local folder_type=$2
-            local a_name=$3
-            local item_path="./$p_id/$folder_type/$a_name"
-            
-            echo "------------------------------------------------"
-            echo "📦 Preparing Artifact: $a_name ($folder_type)"
-            
-            # Create a temporary working directory for compiling the artifact archive
-            TMP_DIR=$(mktemp -d)
-            ZIP_FILE="$TMP_DIR/$a_name.zip"
+          echo "✅ OAuth token fetched"
 
-            # Check if it is a directory (unzipped IFlow structure) or a direct file
-            if [ -d "$item_path" ]; then
-              # Zip the inner contents of the directory directly (do not include parent folder hierarchy inside zip)
-              (cd "$item_path" && zip -r "$ZIP_FILE" . > /dev/null)
-            else
-              # If it's a single raw file (like a standalone xml value mapping), bundle the file directly
-              cp "$item_path" "$TMP_DIR/"
-              (cd "$TMP_DIR" && zip "$ZIP_FILE" "$(basename "$item_path")" > /dev/null)
-            fi
+          # =========================================================
+          # VERIFY CPI API ACCESS
+          # =========================================================
 
-            # Check if artifact already exists in the package on CPI
-            CHECK_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              -H "Authorization: Bearer $ACCESS_TOKEN" \
-              "https://$CPI_HOST/api/v1/IntegrationPackages('$p_id')/IntegrationDesigntimeArtifacts(Id='$a_name',Version='active')")
+          echo "🔍 Testing CPI API access..."
 
-            if [ "$CHECK_STATUS" == "200" ]; then
-              echo "🔄 Artifact '$a_name' exists. Performing UPDATE (PUT method)..."
-              
-              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
-                -H "Authorization: Bearer $ACCESS_TOKEN" \
-                -F "file=@$ZIP_FILE" \
-                "https://$CPI_HOST/api/v1/IntegrationPackages('$p_id')/IntegrationDesigntimeArtifacts(Id='$a_name',Version='active')")
-            else
-              echo "➕ Artifact '$a_name' does not exist. Performing CREATE (POST method)..."
-              
-              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-                -H "Authorization: Bearer $ACCESS_TOKEN" \
-                -H "Content-Type: application/json" \
-                -d "{\"Id\":\"$a_name\", \"Name\":\"$a_name\"}" \
-                "https://$CPI_HOST/api/v1/IntegrationPackages('$p_id')/IntegrationDesigntimeArtifacts")
-                
-              # After creating the empty shell reference entry, upload the resource binary contents
-              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
-                -H "Authorization: Bearer $ACCESS_TOKEN" \
-                -F "file=@$ZIP_FILE" \
-                "https://$CPI_HOST/api/v1/IntegrationPackages('$p_id')/IntegrationDesigntimeArtifacts(Id='$a_name',Version='active')")
-            fi
+          TEST_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            "$CPI_HOST/api/v1/IntegrationPackages" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/json")
 
-            # Clean up local temporary file tracks
-            rm -rf "$TMP_DIR"
+          TEST_STATUS=$(echo "$TEST_RESPONSE" | grep HTTP_STATUS | cut -d: -f2)
 
-            # Check execution API response boundaries (200 OK or 201 Created/Accepted)
-            if [[ "$HTTP_CODE" =~ ^20[0-1]$ ]]; then
-              echo "✅ Successfully synced and saved '$a_name' to CPI."
-            else
-              echo "❌ ERROR: Failed pushing '$a_name' to CPI. HTTP Response Code received: $HTTP_CODE"
+          if [ "$TEST_STATUS" != "200" ]; then
+
+            echo "❌ CPI API access failed"
+
+            echo "$TEST_RESPONSE"
+
+            exit 1
+
+          fi
+
+          echo "✅ CPI API access verified"
+
+
+          # =========================================================
+          # VALIDATE / CREATE PACKAGE
+          # =========================================================
+
+          echo "🔍 Checking package: $PACKAGE_ID"
+
+          ENCODED_PACKAGE_ID=$(printf '%s' "$PACKAGE_ID" | sed 's/ /%20/g')
+
+          PACKAGE_STATUS=$(curl -s \
+            -o /dev/null \
+            -w "%{http_code}" \
+            -X GET \
+            "$CPI_HOST/api/v1/IntegrationPackages('$ENCODED_PACKAGE_ID')" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/json")
+
+          # =========================================================
+          # PACKAGE EXISTS
+          # =========================================================
+
+          if [ "$PACKAGE_STATUS" = "200" ]; then
+
+            echo "✅ Package exists in CPI"
+
+          # =========================================================
+          # CREATE PACKAGE
+          # =========================================================
+
+          elif [ "$PACKAGE_STATUS" = "404" ]; then
+
+            echo "⚠️ Package not found in CPI"
+
+            echo "📦 Creating package: $PACKAGE_ID"
+
+            CREATE_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+              -X POST \
+              "$CPI_HOST/api/v1/IntegrationPackages" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"Id\": \"$PACKAGE_ID\",
+                \"Name\": \"$PACKAGE_ID\",
+                \"ShortText\": \"$PACKAGE_ID\",
+                \"Version\": \"1.0.0\"
+              }")
+
+            CREATE_STATUS=$(echo "$CREATE_RESPONSE" | grep HTTP_STATUS | cut -d: -f2)
+
+            echo "$CREATE_RESPONSE"
+
+            if [ "$CREATE_STATUS" != "201" ] && \
+              [ "$CREATE_STATUS" != "200" ]; then
+
+              echo "❌ Package creation failed"
+
               exit 1
+
             fi
-          }
 
-          echo "-----------------------------------------"
-          echo " Executing Sync Operations "
-          echo "-----------------------------------------"
-
-          # ==========================================
-          # BUILD ARTIFACT TYPE LIST
-          # ==========================================
-
-          declare -a ARTIFACT_TYPES
-
-          if [ "$ARTIFACT_TYPE" = "all" ]; then
-
-          echo "Artifact Type = ALL"
-          echo "Sync Mode automatically set to ALL"
-
-          SYNC_MODE="ALL"
-
-          ARTIFACT_TYPES=(
-          "IntegrationFlow"
-          "MessageMapping"
-          "ValueMapping"
-          "ScriptCollection"
-          )
+            echo "✅ Package created successfully"
 
           else
 
-          ARTIFACT_TYPES=("$ARTIFACT_TYPE")
+            echo "❌ Failed checking package"
+
+            exit 1
 
           fi
 
-          # ==========================================
-          # PROCESS TYPES
-          # ==========================================
 
-          for CURRENT_TYPE in "${ARTIFACT_TYPES[@]}"
-          do
+          # =========================================================
+          # HELPER: RESOLVE ARTIFACT TYPE CONFIG
+          # Maps ARTIFACT_TYPE input to:
+          #   - Git folder name under PACKAGE_ID/
+          #   - CPI API resource name (for GET list & DELETE)
+          #   - CPI API upload endpoint path
+          #   - Whether runtime deploy is supported
+          # =========================================================
 
-          TARGET_DIR="./$PACKAGE_ID/$CURRENT_TYPE"
+          resolve_artifact_type() {
+            local TYPE="$1"
+
+            case "$TYPE" in
+
+              iflow)
+                GIT_FOLDER="IntegrationFlow"
+                CPI_LIST_RESOURCE="IntegrationDesigntimeArtifacts"
+                CPI_UPLOAD_RESOURCE="IntegrationDesigntimeArtifacts"
+                CPI_DELETE_RESOURCE="IntegrationDesigntimeArtifacts"
+                SUPPORTS_DEPLOY=true
+                ;;
+
+              messagemapping)
+                GIT_FOLDER="MessageMapping"
+                CPI_LIST_RESOURCE="MessageMappingDesigntimeArtifacts"
+                CPI_UPLOAD_RESOURCE="MessageMappingDesigntimeArtifacts"
+                CPI_DELETE_RESOURCE="MessageMappingDesigntimeArtifacts"
+                SUPPORTS_DEPLOY=false
+                ;;
+
+              valuemapping)
+                GIT_FOLDER="ValueMapping"
+                CPI_LIST_RESOURCE="ValueMappingDesigntimeArtifacts"
+                CPI_UPLOAD_RESOURCE="ValueMappingDesigntimeArtifacts"
+                CPI_DELETE_RESOURCE="ValueMappingDesigntimeArtifacts"
+                SUPPORTS_DEPLOY=true
+                ;;
+
+              scriptcollection)
+                GIT_FOLDER="ScriptCollection"
+                CPI_LIST_RESOURCE="ScriptCollectionDesigntimeArtifacts"
+                CPI_UPLOAD_RESOURCE="ScriptCollectionDesigntimeArtifacts"
+                CPI_DELETE_RESOURCE="ScriptCollectionDesigntimeArtifacts"
+                SUPPORTS_DEPLOY=false
+                ;;
+
+              *)
+                echo "❌ Unknown artifact type: $TYPE"
+                exit 1
+                ;;
+
+            esac
+          }
+
+          # =========================================================
+          # HELPER: PROCESS ONE ARTIFACT TYPE
+          # =========================================================
+
+          process_artifact_type() {
+
+            local TYPE="$1"
+
+            resolve_artifact_type "$TYPE"
+
+            ARTIFACT_ROOT="${{ github.workspace }}/${PACKAGE_ID}/${GIT_FOLDER}"
+
+            # -------------------------------------------------------
+            # VALIDATE GIT FOLDER EXISTS
+            # -------------------------------------------------------
+
+            if [ ! -d "$ARTIFACT_ROOT" ]; then
+
+              echo "⚠️ Folder not found for type '$TYPE', skipping: $ARTIFACT_ROOT"
+
+              return 0
+
+            fi
+
+            echo ""
+            echo "========================================================="
+            echo "📂 Processing artifact type: $TYPE  →  $GIT_FOLDER"
+            echo "========================================================="
+
+            FOUND_ARTIFACT=false
+
+            # -------------------------------------------------------
+            # PACKAGE / ALL MODE:
+            # DELETE CPI ARTIFACTS NOT PRESENT IN GIT
+            # -------------------------------------------------------
+
+            if [ "$DEPLOY_MODE" = "ALL" ]; then
+
+              echo "🔄 ALL sync — removing CPI artifacts deleted from Git..."
+
+              CPI_ARTIFACTS=$(curl -s \
+                "$CPI_HOST/api/v1/IntegrationPackages('$PACKAGE_ID')/${CPI_LIST_RESOURCE}" \
+                -H "Authorization: Bearer $TOKEN" \
+                -H "Accept: application/json" | jq -r '.d.results[]?.Id')
+
+              for CPI_ARTIFACT in $CPI_ARTIFACTS; do
+
+                if [ ! -d "$ARTIFACT_ROOT/$CPI_ARTIFACT" ]; then
+
+                  echo "🗑️ '$CPI_ARTIFACT' not in Git — removing from CPI..."
+
+                  DELETE_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+                    -X DELETE \
+                    "$CPI_HOST/api/v1/${CPI_DELETE_RESOURCE}(Id='$CPI_ARTIFACT',Version='active')" \
+                    -H "Authorization: Bearer $TOKEN")
+
+                  DELETE_STATUS=$(echo "$DELETE_RESPONSE" | grep HTTP_STATUS | cut -d: -f2)
+
+                  echo "$DELETE_RESPONSE"
+
+                  if [ "$DELETE_STATUS" != "200" ] && \
+                     [ "$DELETE_STATUS" != "202" ] && \
+                     [ "$DELETE_STATUS" != "204" ]; then
+
+                    echo "❌ Failed deleting artifact: $CPI_ARTIFACT"
+
+                    exit 1
+
+                  fi
+
+                  echo "✅ Deleted from CPI: $CPI_ARTIFACT"
+
+                fi
+
+              done
+
+            fi
+
+            # -------------------------------------------------------
+            # PROCESS EACH ARTIFACT DIRECTORY
+            # -------------------------------------------------------
+
+            for ARTIFACT_DIR in "$ARTIFACT_ROOT"/*; do
+
+              [ -d "$ARTIFACT_DIR" ] || continue
+
+              ARTIFACT_ID=$(basename "$ARTIFACT_DIR")
+
+              # ---------------------------------------------------
+              # VALIDATE SINGLE ARTIFACT
+              # ---------------------------------------------------
+
+              if [ "$DEPLOY_MODE" = "SINGLE" ] && \
+                 [ "$ARTIFACT_ID" = "$DEPLOY_ARTIFACT" ]; then
+
+                FOUND_ARTIFACT=true
+
+              fi
+
+              # ---------------------------------------------------
+              # SKIP NON-SELECTED ARTIFACTS IN SINGLE MODE
+              # ---------------------------------------------------
+
+              if [ "$DEPLOY_MODE" = "SINGLE" ] && \
+                 [ "$ARTIFACT_ID" != "$DEPLOY_ARTIFACT" ]; then
+
+                echo "⏭️ Skipping: $ARTIFACT_ID"
+
+                continue
+
+              fi
+
+              ZIP_FILE="/tmp/${ARTIFACT_ID}.zip"
+
+              echo "------------------------------------------------"
+              echo "📥 Processing artifact: $ARTIFACT_ID  [$TYPE]"
+
+              rm -f "$ZIP_FILE"
+
+              # ---------------------------------------------------
+              # CREATE ZIP
+              # ---------------------------------------------------
+
+              echo "🗜️ Creating ZIP..."
+
+              (
+                cd "$ARTIFACT_DIR"
+
+                zip -r "$ZIP_FILE" .
+              )
+
+              if [ ! -f "$ZIP_FILE" ]; then
+
+                echo "❌ ZIP creation failed"
+
+                exit 1
+
+              fi
+
+              CONTENT=$(base64 -w 0 "$ZIP_FILE")
+
+              # ---------------------------------------------------
+              # TRY UPDATE FIRST
+              # ---------------------------------------------------
+
+              echo "♻️ Attempting UPDATE..."
+
+              RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+                -X PUT \
+                "$CPI_HOST/api/v1/${CPI_UPLOAD_RESOURCE}(Id='$ARTIFACT_ID',Version='active')" \
+                -H "Authorization: Bearer $TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{
+                  \"Name\": \"$ARTIFACT_ID\",
+                  \"PackageId\": \"$PACKAGE_ID\",
+                  \"ArtifactContent\": \"$CONTENT\"
+                }")
+
+              STATUS=$(echo "$RESPONSE" | grep HTTP_STATUS | cut -d: -f2)
+
+              echo "$RESPONSE"
+
+              # ---------------------------------------------------
+              # UPDATE SUCCESS
+              # ---------------------------------------------------
+
+              if [ "$STATUS" = "200" ] || \
+                 [ "$STATUS" = "201" ] || \
+                 [ "$STATUS" = "202" ]; then
+
+                echo "✅ UPDATE successful: $ARTIFACT_ID"
+
+              else
+
+                echo "⚠️ UPDATE failed — trying CREATE..."
+
+                # -------------------------------------------------
+                # CREATE ARTIFACT
+                # -------------------------------------------------
+
+                RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+                  -X POST \
+                  "$CPI_HOST/api/v1/IntegrationPackages('$PACKAGE_ID')/${CPI_UPLOAD_RESOURCE}" \
+                  -H "Authorization: Bearer $TOKEN" \
+                  -H "Content-Type: application/json" \
+                  -d "{
+                    \"Id\": \"$ARTIFACT_ID\",
+                    \"Name\": \"$ARTIFACT_ID\",
+                    \"PackageId\": \"$PACKAGE_ID\",
+                    \"ArtifactContent\": \"$CONTENT\"
+                  }")
+
+                STATUS=$(echo "$RESPONSE" | grep HTTP_STATUS | cut -d: -f2)
+
+                echo "$RESPONSE"
+
+                # -------------------------------------------------
+                # HANDLE ALREADY EXISTS
+                # -------------------------------------------------
+
+                if echo "$RESPONSE" | grep -qi "already exists"; then
+
+                  echo "⚠️ Artifact already exists — retrying UPDATE..."
+
+                  RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+                    -X PUT \
+                    "$CPI_HOST/api/v1/${CPI_UPLOAD_RESOURCE}(Id='$ARTIFACT_ID',Version='active')" \
+                    -H "Authorization: Bearer $TOKEN" \
+                    -H "Content-Type: application/json" \
+                    -d "{
+                      \"Name\": \"$ARTIFACT_ID\",
+                      \"PackageId\": \"$PACKAGE_ID\",
+                      \"ArtifactContent\": \"$CONTENT\"
+                    }")
+
+                  STATUS=$(echo "$RESPONSE" | grep HTTP_STATUS | cut -d: -f2)
+
+                  echo "$RESPONSE"
+
+                fi
+
+                # -------------------------------------------------
+                # FINAL VALIDATION
+                # -------------------------------------------------
+
+                if [ "$STATUS" != "200" ] && \
+                   [ "$STATUS" != "201" ] && \
+                   [ "$STATUS" != "202" ]; then
+
+                  echo "❌ Artifact create/update failed: $ARTIFACT_ID"
+
+                  exit 1
+
+                fi
+
+              fi
+
+              # ---------------------------------------------------
+              # DEPLOY ARTIFACT (only for supported types)
+              # iflow and valuemapping support runtime deploy;
+              # messagemapping and scriptcollection do not.
+              # ---------------------------------------------------
+
+              if [ "$SUPPORTS_DEPLOY" = "true" ]; then
+
+                echo "🚀 Deploying artifact: $ARTIFACT_ID..."
+
+                DEPLOY_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+                  -X POST \
+                  "$CPI_HOST/api/v1/DeployIntegrationDesigntimeArtifact?Id='$ARTIFACT_ID'&Version='active'" \
+                  -H "Authorization: Bearer $TOKEN")
+
+                DEPLOY_STATUS=$(echo "$DEPLOY_RESPONSE" | grep HTTP_STATUS | cut -d: -f2)
+
+                echo "$DEPLOY_RESPONSE"
+
+                if [ "$DEPLOY_STATUS" != "200" ] && \
+                   [ "$DEPLOY_STATUS" != "202" ]; then
+
+                  echo "❌ Deployment failed: $ARTIFACT_ID"
+
+                  exit 1
+
+                fi
+
+                echo "✅ Deployed: $ARTIFACT_ID"
+
+              else
+
+                echo "ℹ️ Runtime deploy not applicable for type '$TYPE' — skipping deploy step"
+
+              fi
+
+            done
+
+            # -------------------------------------------------------
+            # VALIDATE SINGLE ARTIFACT WAS FOUND
+            # -------------------------------------------------------
+
+            if [ "$DEPLOY_MODE" = "SINGLE" ] && \
+               [ "$FOUND_ARTIFACT" = false ]; then
+
+              echo "❌ Artifact '$DEPLOY_ARTIFACT' not found in Git under $GIT_FOLDER"
+
+              exit 1
+
+            fi
+
+          }
+
+
+          # =========================================================
+          # DISPATCH: SINGLE TYPE OR ALL TYPES
+          # =========================================================
+
+          if [ "$ARTIFACT_TYPE" = "all" ]; then
+
+            for TYPE in iflow messagemapping valuemapping scriptcollection; do
+
+              process_artifact_type "$TYPE"
+
+            done
+
+          else
+
+            process_artifact_type "$ARTIFACT_TYPE"
+
+          fi
 
           echo ""
-          echo "========================================="
-          echo "Processing Type : $CURRENT_TYPE"
-          echo "Directory       : $TARGET_DIR"
-          echo "========================================="
-
-          if [ ! -d "$TARGET_DIR" ]; then
-          echo "Directory not found. Skipping."
-          continue
-          fi
-
-          # ========================================
-          # SINGLE MODE
-          # ========================================
-
-          if [ "$SYNC_MODE" = "SINGLE" ]; then
-
-          ITEM="$TARGET_DIR/$ARTIFACT_NAME"
-
-          if [ ! -d "$ITEM" ] && [ ! -f "$ITEM" ]; then
-          echo "Artifact not found:"
-          echo "$ITEM"
-          exit 1
-          fi
-
-          upload_to_cpi \
-          "$PACKAGE_ID" \
-          "$CURRENT_TYPE" \
-          "$ARTIFACT_NAME"
-
-          continue
-
-          fi
-
-          # ========================================
-          # ALL MODE
-          # ========================================
-
-          FOUND=false
-
-          for ITEM in "$TARGET_DIR"/*
-          do
-
-          [ -e "$ITEM" ] || continue
-
-          FOUND=true
-
-          ARTIFACT_BASE_NAME=$(basename "$ITEM")
-
-          upload_to_cpi \
-          "$PACKAGE_ID" \
-          "$CURRENT_TYPE" \
-          "$ARTIFACT_BASE_NAME"
-
-          done
-
-          if [ "$FOUND" = false ]; then
-          echo "No artifacts found in:"
-          echo "$TARGET_DIR"
-          fi
-
-          done
-
-          echo ""
-          echo "========================================="
-          echo " Git → CPI Sync Completed Successfully "
-          echo "========================================="
+          echo "🎉 Deployment completed successfully"
