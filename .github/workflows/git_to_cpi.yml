@@ -33,7 +33,6 @@ on:
       target_git_branch:
         description: 'Target Git Branch to pull from'
         required: true
-        default: 'CPI-Main'
         type: string
 
 jobs:
@@ -41,10 +40,10 @@ jobs:
     runs-on: ubuntu-latest
     
     env:
-      CPI_HOST: ${{ secrets.SAP_CPI_HOST }}
-      CPI_CLIENT_ID: ${{ secrets.SAP_CPI_CLIENT_ID }}
-      CPI_CLIENT_SECRET: ${{ secrets.SAP_CPI_CLIENT_SECRET }}
-      CPI_TOKEN_URL: ${{ secrets.SAP_CPI_TOKEN_URL }}
+      CPI_HOST: ${{ secrets.CPI_TMN_HOST }}
+      CPI_CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      CPI_CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+      CPI_TOKEN_URL: ${{ secrets.AUTH_URL }}
 
     steps:
       - name: Checkout Code from Target Branch
