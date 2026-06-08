@@ -22,7 +22,7 @@ on:
           - All
 
       SYNC_MODE:
-        description: "Sync Mode"
+        description: "Sync Mode(Select sync mode 'SINGLE' only if deploying a single artifact)"
         required: true
         default: "ALL"
         type: choice
@@ -38,7 +38,6 @@ on:
       BRANCH_NAME:
         description: "Target Git Branch"
         required: true
-        default: "CPI-Main"
         type: string
 
 permissions:

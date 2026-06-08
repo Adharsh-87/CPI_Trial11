@@ -22,7 +22,7 @@ on:
           - All
 
       DEPLOY_MODE:
-        description: "Sync Mode"
+        description: "Sync Mode(Select Sync mode 'SINGLE' only if deploying a single artifact)"
         required: true
         default: "ALL"
         type: choice
