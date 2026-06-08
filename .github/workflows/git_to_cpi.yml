@@ -12,14 +12,14 @@ on:
       ARTIFACT_TYPE:
         description: "Artifact Type"
         required: true
-        default: "iflow"
+        default: "IntegrationFlow"
         type: choice
         options:
-          - iflow
-          - valuemapping
-          - messagemapping
-          - scriptcollection
-          - all
+          - IntegrationFlow
+          - ValueMapping
+          - MessageMapping
+          - ScriptCollection
+          - All
 
       DEPLOY_MODE:
         description: "Sync Mode"
@@ -90,7 +90,7 @@ jobs:
           if [ "$DEPLOY_MODE" = "SINGLE" ] && \
              [ -z "$DEPLOY_ARTIFACT" ]; then
 
-            echo "❌ ARTIFACT_ID is required for SINGLE mode"
+            echo "ARTIFACT_ID is required for SINGLE mode"
 
             exit 1
 
@@ -100,7 +100,7 @@ jobs:
           # FETCH OAUTH TOKEN
           # =========================================================
 
-          echo "🔑 Fetching OAuth token..."
+          echo "Fetching OAuth token..."
 
           TOKEN_RESPONSE=$(curl -s -X POST \
             -u "$CPI_CLIENT_ID:$CPI_CLIENT_SECRET" \
@@ -113,7 +113,7 @@ jobs:
           if [ "$TOKEN" = "null" ] || \
              [ -z "$TOKEN" ]; then
 
-            echo "❌ Failed to get access token"
+            echo "Failed to get access token"
 
             echo "$TOKEN_RESPONSE"
 
@@ -121,13 +121,13 @@ jobs:
 
           fi
 
-          echo "✅ OAuth token fetched"
+          echo "OAuth token fetched"
 
           # =========================================================
           # VERIFY CPI API ACCESS
           # =========================================================
 
-          echo "🔍 Testing CPI API access..."
+          echo "Testing CPI API access..."
 
           TEST_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
             "$CPI_HOST/api/v1/IntegrationPackages" \
@@ -138,7 +138,7 @@ jobs:
 
           if [ "$TEST_STATUS" != "200" ]; then
 
-            echo "❌ CPI API access failed"
+            echo "CPI API access failed"
 
             echo "$TEST_RESPONSE"
 
@@ -146,14 +146,14 @@ jobs:
 
           fi
 
-          echo "✅ CPI API access verified"
+          echo "CPI API access verified"
 
 
           # =========================================================
           # VALIDATE / CREATE PACKAGE
           # =========================================================
 
-          echo "🔍 Checking package: $PACKAGE_ID"
+          echo "Checking package: $PACKAGE_ID"
 
           ENCODED_PACKAGE_ID=$(printf '%s' "$PACKAGE_ID" | sed 's/ /%20/g')
 
@@ -171,7 +171,7 @@ jobs:
 
           if [ "$PACKAGE_STATUS" = "200" ]; then
 
-            echo "✅ Package exists in CPI"
+            echo "Package exists in CPI"
 
           # =========================================================
           # CREATE PACKAGE
@@ -179,9 +179,9 @@ jobs:
 
           elif [ "$PACKAGE_STATUS" = "404" ]; then
 
-            echo "⚠️ Package not found in CPI"
+            echo "Package not found in CPI"
 
-            echo "📦 Creating package: $PACKAGE_ID"
+            echo "Creating package: $PACKAGE_ID"
 
             CREATE_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
               -X POST \
@@ -202,17 +202,17 @@ jobs:
             if [ "$CREATE_STATUS" != "201" ] && \
               [ "$CREATE_STATUS" != "200" ]; then
 
-              echo "❌ Package creation failed"
+              echo "Package creation failed"
 
               exit 1
 
             fi
 
-            echo "✅ Package created successfully"
+            echo "Package created successfully"
 
           else
 
-            echo "❌ Failed checking package"
+            echo "Failed checking package"
 
             exit 1
 
@@ -233,7 +233,7 @@ jobs:
 
             case "$TYPE" in
 
-              iflow)
+              IntegrationFlow)
                 GIT_FOLDER="IntegrationFlow"
                 CPI_LIST_RESOURCE="IntegrationDesigntimeArtifacts"
                 CPI_UPLOAD_RESOURCE="IntegrationDesigntimeArtifacts"
@@ -241,7 +241,7 @@ jobs:
                 SUPPORTS_DEPLOY=true
                 ;;
 
-              messagemapping)
+              MessageMapping)
                 GIT_FOLDER="MessageMapping"
                 CPI_LIST_RESOURCE="MessageMappingDesigntimeArtifacts"
                 CPI_UPLOAD_RESOURCE="MessageMappingDesigntimeArtifacts"
@@ -249,7 +249,7 @@ jobs:
                 SUPPORTS_DEPLOY=false
                 ;;
 
-              valuemapping)
+              ValueMapping)
                 GIT_FOLDER="ValueMapping"
                 CPI_LIST_RESOURCE="ValueMappingDesigntimeArtifacts"
                 CPI_UPLOAD_RESOURCE="ValueMappingDesigntimeArtifacts"
@@ -257,7 +257,7 @@ jobs:
                 SUPPORTS_DEPLOY=true
                 ;;
 
-              scriptcollection)
+              ScriptCollection)
                 GIT_FOLDER="ScriptCollection"
                 CPI_LIST_RESOURCE="ScriptCollectionDesigntimeArtifacts"
                 CPI_UPLOAD_RESOURCE="ScriptCollectionDesigntimeArtifacts"
@@ -266,7 +266,7 @@ jobs:
                 ;;
 
               *)
-                echo "❌ Unknown artifact type: $TYPE"
+                echo "Unknown artifact type: $TYPE"
                 exit 1
                 ;;
 
@@ -291,7 +291,7 @@ jobs:
 
             if [ ! -d "$ARTIFACT_ROOT" ]; then
 
-              echo "⚠️ Folder not found for type '$TYPE', skipping: $ARTIFACT_ROOT"
+              echo "Folder not found for type '$TYPE', skipping: $ARTIFACT_ROOT"
 
               return 0
 
@@ -299,7 +299,7 @@ jobs:
 
             echo ""
             echo "========================================================="
-            echo "📂 Processing artifact type: $TYPE  →  $GIT_FOLDER"
+            echo "Processing artifact type: $TYPE  ->  $GIT_FOLDER"
             echo "========================================================="
 
             FOUND_ARTIFACT=false
@@ -311,7 +311,7 @@ jobs:
 
             if [ "$DEPLOY_MODE" = "ALL" ]; then
 
-              echo "🔄 ALL sync — removing CPI artifacts deleted from Git..."
+              echo "ALL sync - removing CPI artifacts deleted from Git..."
 
               CPI_ARTIFACTS=$(curl -s \
                 "$CPI_HOST/api/v1/IntegrationPackages('$PACKAGE_ID')/${CPI_LIST_RESOURCE}" \
@@ -322,7 +322,7 @@ jobs:
 
                 if [ ! -d "$ARTIFACT_ROOT/$CPI_ARTIFACT" ]; then
 
-                  echo "🗑️ '$CPI_ARTIFACT' not in Git — removing from CPI..."
+                  echo "'$CPI_ARTIFACT' not in Git - removing from CPI..."
 
                   DELETE_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
                     -X DELETE \
@@ -337,13 +337,13 @@ jobs:
                      [ "$DELETE_STATUS" != "202" ] && \
                      [ "$DELETE_STATUS" != "204" ]; then
 
-                    echo "❌ Failed deleting artifact: $CPI_ARTIFACT"
+                    echo "Failed deleting artifact: $CPI_ARTIFACT"
 
                     exit 1
 
                   fi
 
-                  echo "✅ Deleted from CPI: $CPI_ARTIFACT"
+                  echo "Deleted from CPI: $CPI_ARTIFACT"
 
                 fi
 
@@ -379,7 +379,7 @@ jobs:
               if [ "$DEPLOY_MODE" = "SINGLE" ] && \
                  [ "$ARTIFACT_ID" != "$DEPLOY_ARTIFACT" ]; then
 
-                echo "⏭️ Skipping: $ARTIFACT_ID"
+                echo "Skipping: $ARTIFACT_ID"
 
                 continue
 
@@ -388,7 +388,7 @@ jobs:
               ZIP_FILE="/tmp/${ARTIFACT_ID}.zip"
 
               echo "------------------------------------------------"
-              echo "📥 Processing artifact: $ARTIFACT_ID  [$TYPE]"
+              echo "Processing artifact: $ARTIFACT_ID  [$TYPE]"
 
               rm -f "$ZIP_FILE"
 
@@ -396,7 +396,7 @@ jobs:
               # CREATE ZIP
               # ---------------------------------------------------
 
-              echo "🗜️ Creating ZIP..."
+              echo "Creating ZIP..."
 
               (
                 cd "$ARTIFACT_DIR"
@@ -406,7 +406,7 @@ jobs:
 
               if [ ! -f "$ZIP_FILE" ]; then
 
-                echo "❌ ZIP creation failed"
+                echo "ZIP creation failed"
 
                 exit 1
 
@@ -417,21 +417,21 @@ jobs:
               # ---------------------------------------------------
               # UPLOAD STRATEGY PER ARTIFACT TYPE
               #
-              # iflow / messagemapping / scriptcollection:
-              #   → Try PUT (update), fallback to POST (create)
+              # IntegrationFlow / MessageMapping / ScriptCollection:
+              #   -> Try PUT (update), fallback to POST (create)
               #
-              # valuemapping:
-              #   → SAP does not support PUT for ValueMapping.
+              # ValueMapping:
+              #   -> SAP does not support PUT for ValueMapping.
               #     Strategy: DELETE if exists, then POST (create).
               # ---------------------------------------------------
 
-              if [ "$TYPE" = "valuemapping" ]; then
+              if [ "$TYPE" = "ValueMapping" ]; then
 
                 # -------------------------------------------------
                 # VALUEMAPPING: CHECK IF EXISTS
                 # -------------------------------------------------
 
-                echo "🔍 Checking if ValueMapping exists in CPI: $ARTIFACT_ID"
+                echo "Checking if ValueMapping exists in CPI: $ARTIFACT_ID"
 
                 CHECK_STATUS=$(curl -s \
                   -o /dev/null \
@@ -446,7 +446,7 @@ jobs:
 
                 if [ "$CHECK_STATUS" = "200" ]; then
 
-                  echo "🗑️ Existing ValueMapping found — deleting before re-create..."
+                  echo "Existing ValueMapping found - deleting before re-create..."
 
                   DEL_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
                     -X DELETE \
@@ -461,17 +461,17 @@ jobs:
                      [ "$DEL_STATUS" != "202" ] && \
                      [ "$DEL_STATUS" != "204" ]; then
 
-                    echo "❌ Failed to delete existing ValueMapping: $ARTIFACT_ID"
+                    echo "Failed to delete existing ValueMapping: $ARTIFACT_ID"
 
                     exit 1
 
                   fi
 
-                  echo "✅ Deleted existing ValueMapping: $ARTIFACT_ID"
+                  echo "Deleted existing ValueMapping: $ARTIFACT_ID"
 
                 else
 
-                  echo "ℹ️ ValueMapping does not exist yet — proceeding to CREATE"
+                  echo "ValueMapping does not exist yet - proceeding to CREATE"
 
                 fi
 
@@ -479,7 +479,7 @@ jobs:
                 # VALUEMAPPING: CREATE (POST)
                 # -------------------------------------------------
 
-                echo "📤 Creating ValueMapping: $ARTIFACT_ID"
+                echo "Creating ValueMapping: $ARTIFACT_ID"
 
                 RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
                   -X POST \
@@ -501,24 +501,24 @@ jobs:
                    [ "$STATUS" != "201" ] && \
                    [ "$STATUS" != "202" ]; then
 
-                  echo "❌ ValueMapping create failed: $ARTIFACT_ID"
+                  echo "ValueMapping create failed: $ARTIFACT_ID"
 
                   exit 1
 
                 fi
 
-                echo "✅ ValueMapping created: $ARTIFACT_ID"
+                echo "ValueMapping created: $ARTIFACT_ID"
 
               else
 
                 # -------------------------------------------------
-                # iflow / messagemapping / scriptcollection:
+                # IntegrationFlow / MessageMapping / ScriptCollection:
                 # TRY PUT (update) FIRST
                 # -------------------------------------------------
 
-                echo "♻️ Attempting UPDATE..."
+                echo "Attempting UPDATE..."
 
-                if [ "$TYPE" = "iflow" ]; then
+                if [ "$TYPE" = "IntegrationFlow" ]; then
                   PUT_BODY="{
                     \"Name\": \"$ARTIFACT_ID\",
                     \"PackageId\": \"$PACKAGE_ID\",
@@ -549,11 +549,11 @@ jobs:
                    [ "$STATUS" = "201" ] || \
                    [ "$STATUS" = "202" ]; then
 
-                  echo "✅ UPDATE successful: $ARTIFACT_ID"
+                  echo "UPDATE successful: $ARTIFACT_ID"
 
                 else
 
-                  echo "⚠️ UPDATE failed — trying CREATE..."
+                  echo "UPDATE failed - trying CREATE..."
 
                   # -----------------------------------------------
                   # CREATE ARTIFACT (POST)
@@ -576,12 +576,12 @@ jobs:
                   echo "$RESPONSE"
 
                   # -----------------------------------------------
-                  # HANDLE ALREADY EXISTS — RETRY PUT
+                  # HANDLE ALREADY EXISTS - RETRY PUT
                   # -----------------------------------------------
 
                   if echo "$RESPONSE" | grep -qi "already exists"; then
 
-                    echo "⚠️ Artifact already exists — retrying UPDATE..."
+                    echo "Artifact already exists - retrying UPDATE..."
 
                     RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
                       -X PUT \
@@ -604,7 +604,7 @@ jobs:
                      [ "$STATUS" != "201" ] && \
                      [ "$STATUS" != "202" ]; then
 
-                    echo "❌ Artifact create/update failed: $ARTIFACT_ID"
+                    echo "Artifact create/update failed: $ARTIFACT_ID"
 
                     exit 1
 
@@ -616,17 +616,17 @@ jobs:
 
               # ---------------------------------------------------
               # DEPLOY ARTIFACT (only for supported types)
-              # iflow and valuemapping support runtime deploy;
-              # messagemapping and scriptcollection do not.
+              # IntegrationFlow and ValueMapping support runtime deploy;
+              # MessageMapping and ScriptCollection do not.
               # ---------------------------------------------------
 
               if [ "$SUPPORTS_DEPLOY" = "true" ]; then
 
-                echo "🚀 Deploying artifact: $ARTIFACT_ID..."
+                echo "Deploying artifact: $ARTIFACT_ID..."
 
-                if [ "$TYPE" = "iflow" ]; then
+                if [ "$TYPE" = "IntegrationFlow" ]; then
                   DEPLOY_ENDPOINT="$CPI_HOST/api/v1/DeployIntegrationDesigntimeArtifact?Id='$ARTIFACT_ID'&Version='active'"
-                elif [ "$TYPE" = "valuemapping" ]; then
+                elif [ "$TYPE" = "ValueMapping" ]; then
                   DEPLOY_ENDPOINT="$CPI_HOST/api/v1/DeployValueMappingDesigntimeArtifact?Id='$ARTIFACT_ID'&Version='active'"
                 fi
 
@@ -642,17 +642,17 @@ jobs:
                 if [ "$DEPLOY_STATUS" != "200" ] && \
                    [ "$DEPLOY_STATUS" != "202" ]; then
 
-                  echo "❌ Deployment failed: $ARTIFACT_ID"
+                  echo "Deployment failed: $ARTIFACT_ID"
 
                   exit 1
 
                 fi
 
-                echo "✅ Deployed: $ARTIFACT_ID"
+                echo "Deployed: $ARTIFACT_ID"
 
               else
 
-                echo "ℹ️ Runtime deploy not applicable for type '$TYPE' — skipping deploy step"
+                echo "Runtime deploy not applicable for type '$TYPE' - skipping deploy step"
 
               fi
 
@@ -665,7 +665,7 @@ jobs:
             if [ "$DEPLOY_MODE" = "SINGLE" ] && \
                [ "$FOUND_ARTIFACT" = false ]; then
 
-              echo "❌ Artifact '$DEPLOY_ARTIFACT' not found in Git under $GIT_FOLDER"
+              echo "Artifact '$DEPLOY_ARTIFACT' not found in Git under $GIT_FOLDER"
 
               exit 1
 
@@ -678,9 +678,9 @@ jobs:
           # DISPATCH: SINGLE TYPE OR ALL TYPES
           # =========================================================
 
-          if [ "$ARTIFACT_TYPE" = "all" ]; then
+          if [ "$ARTIFACT_TYPE" = "All" ]; then
 
-            for TYPE in iflow messagemapping valuemapping scriptcollection; do
+            for TYPE in IntegrationFlow MessageMapping ValueMapping ScriptCollection; do
 
               process_artifact_type "$TYPE"
 
@@ -693,4 +693,4 @@ jobs:
           fi
 
           echo ""
-          echo "🎉 Deployment completed successfully"
+          echo "Deployment completed successfully"
